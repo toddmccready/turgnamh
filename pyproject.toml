@@ -1,0 +1,18 @@
+[project]
+name = "turgnamh"
+version = "0.1.0"
+description = "A library for experiments."
+readme = "README.md"
+authors = [
+    { name = "Todd McCready", email = "175446079+toddmccready@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.2.1",
+    "polars>=1.18.0",
+    "scipy>=1.14.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
