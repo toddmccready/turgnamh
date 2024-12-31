@@ -1,5 +1,3 @@
-# TODO: Change dicts to a custom wrapper around dict with custom keyerror msgs
-
 # Imports ----
 import numpy as np
 import scipy.sparse as sp
@@ -18,11 +16,12 @@ class Layer:
     obs_names: pl.Series
     feat_names: pl.Series
     
+    
     # Constructors ----
     def __init__(
             self, 
             data: LayerData, 
-            obs_names: pl.Series, 
+            obs_names: pl.Series,
             feat_names: pl.Series):
         self.data = data
         self.obs_names = obs_names
@@ -31,14 +30,10 @@ class Layer:
     
     # Methods ----
     def __str__(self):
-        return (
-            f"Layer | dims: {self.dims}"
-        )
+        return f"Layer | dims: {self.dims}"
     
     def __repr__(self):
-        return (
-            f"Layer | dims: {self.dims}"
-        )
+        return f"Layer | dims: {self.dims}"
     
     def assert_valid(self, assay_name = None, layer_name = None):
         match (assay_name, layer_name):
@@ -89,16 +84,74 @@ class Layer:
         return self.data.shape
 
 
-# Assay
-class Assay:
+class LayerDict:
     layers: dict[str, Layer]
+    owner: str | None
+    
+    def __init__(self, layers: dict[str, Layer], owner: str | None = None):
+        self.layers = layers
+        self.owner = owner
+    
+    def __str__(self) -> str:
+        return str(self.layers)
+    
+    def __repr__(self) -> str:
+        return repr(self.layers)
+    
+    def __getitem__(self, layer_name):
+        match (layer_name in self.layers):
+            case(True):
+                return self.layers[layer_name]
+            
+            case(False): # Raise error
+                e = f"Assay[{self.owner}] | Invalid layer name: layer {layer_name} does not exist in {list(self.layers.keys())}."
+                
+                logger.error(e)
+                raise KeyError(e)
+    
+    def __setitem__(self, layer_name: str, layer: Layer):
+        self.layers[layer_name] = layer
+    
+    def __delitem__(self, layer_name):
+        match (layer_name in self.layers):
+            case(True):
+                del self.layers[layer_name]
+            case(False):
+                e = f"Assay[{self.owner}] | Invalid layer name: layer {layer_name} does not exist in {list(self.layers.keys())}."
+                logger.error(e)
+                
+                raise KeyError(e)
+    
+    def __contains__(self, layer_name):
+        return layer_name in self.layers
+    
+    def __iter__(self):
+        return iter(self.layers)
+    
+    def __len__(self):
+        return len(self.layers)
+    
+    def items(self):
+        return self.layers.items()
+    
+    def keys(self):
+        return self.layers.keys()
+    
+    def values(self):
+        return self.layers.values()
+
+
+
+
+class Assay:
+    layers: LayerDict
     default_layer: str
     obs_md: pl.DataFrame
     feat_md: pl.DataFrame
-    obs_mship: pl.DataFrame
-    feat_mship: pl.DataFrame
-    __obs_label: str
-    __feat_label: str
+    _obs_mship: pl.DataFrame
+    _feat_mship: pl.DataFrame
+    _obs_label: str
+    _feat_label: str
     
     # Constructors ----
     @classmethod
@@ -106,6 +159,7 @@ class Assay:
             cls,
             layer: Layer,
             layer_name: str,
+            assay_name : str | None = None,
             obs_md: None | pl.DataFrame = None,
             feat_md: None | pl.DataFrame = None) -> "Assay":
         """
@@ -137,32 +191,30 @@ class Assay:
         assay: Assay = cls()
         
         # Initialize layers dict
-        assay.layers = {}
+        assay.layers = LayerDict({})
         
         # Set default layer
         assay.default_layer = layer_name
         
         # Set labels
-        assay.__obs_label = layer.obs_names.name
-        assay.__feat_label = layer.feat_names.name
+        assay._obs_label = layer.obs_names.name
+        assay._feat_label = layer.feat_names.name
         
         # Handle `obs_md` options
         match (obs_md):
-            # `obs_md` is a DataFrame
-            case (pl.DataFrame()):
+            case (pl.DataFrame()): # `obs_md` is a DataFrame
                 obs_md = obs_md
                 
-                if assay.__obs_label not in obs_md.columns:
-                    w = f"{assay.__obs_label} column was not found in observation metadata, will be included from the {layer_name} layer's observation names. Please include observation names in obs_md if this is not desired."
+                if assay._obs_label not in obs_md.columns:
+                    w = f"{assay._obs_label} column was not found in observation metadata, will be included from the {layer_name} layer's observation names. Please include observation names in obs_md if this is not desired."
                     logger.warning(w)
                     
                     obs_md = obs_md.with_columns(layer.obs_names)
             
-            # `obs_md` was not given
-            case (None):
+            case (None): # `obs_md` was not given
                 obs_md = layer.obs_names.to_frame()
-            # `obs_md` is invalid
-            case _:
+            
+            case _: # `obs_md` is invalid
                 e = f"obs_md argument should be one of [{b('DataFrame')}, {b('None')}] but got {b(type(obs_md).__name__)}."
                 logger.error(e)
                 
@@ -173,8 +225,8 @@ class Assay:
             case (pl.DataFrame()): # `feat_md` is a DataFrame
                 feat_md = feat_md
                 
-                if assay.__feat_label not in feat_md.columns:
-                    w = f"{assay.__feat_label} column was not found in feature metadata, will be included from the {layer_name} layer's feature names. Please include feature IDs in feat_md if this is not desired."
+                if assay._feat_label not in feat_md.columns:
+                    w = f"{assay._feat_label} column was not found in feature metadata, will be included from the {layer_name} layer's feature names. Please include feature IDs in feat_md if this is not desired."
                     logger.warning(w)
                     
                     feat_md = feat_md.with_columns(layer.feat_names)
@@ -197,23 +249,24 @@ class Assay:
         
         
         # Set layer membership
-        assay.obs_mship = (
+        assay._obs_mship = (
             layer.obs_names.to_frame()
             .with_columns(
-                pl.col(assay.__obs_label).is_in(layer.obs_names)
+                pl.col(assay._obs_label).is_in(layer.obs_names)
                 .alias(layer_name)
             )
         )
-        assay.feat_mship = (
+        assay._feat_mship = (
             layer.feat_names.to_frame()
             .with_columns(
-                pl.col(assay.__feat_label).is_in(layer.feat_names)
+                pl.col(assay._feat_label).is_in(layer.feat_names)
                 .alias(layer_name)
             )
         )
         
         
         return(assay)
+    
     
     # Methods ----
     def assert_valid(self, assay_name: str | None = None):
@@ -224,23 +277,18 @@ class Assay:
         ----------
         - `assay_name` (str) : The assay name to check.
         """
-        match (assay_name):
-            case (None):
-                e = "Unnamed Assay | "
-            case (str()):
-                e = f"Assay[{assay_name}]"
-            case _:
-                e = f"Invalid assay_name argument: should be one of [{b('str'), b('None')}]."
+        # Prefix for potential error
+        e = f"Assay[{assay_name}] | "
         
         # Check that all layers are present in membership dataframes
-        if not set(self.layer_names).issubset(set(self.obs_mship.columns)):
-            e = e + f"Layer names({self.layer_names}) do not match column names in observation membership dataframe({self.obs_mship.columns})."
+        if not set(self.layer_names).issubset(set(self._obs_mship.columns)):
+            e = e + f"Layer names({self.layer_names}) do not match column names in observation membership dataframe({self._obs_mship.columns})."
             
             logger.error(e)
             raise ValueError(e)
         
-        if not set(self.layer_names).issubset(set(self.feat_mship.columns)):
-            e = f"Layer names({self.layer_names}) do not match column names in feature membership dataframe({self.feat_mship.columns})."
+        if not set(self.layer_names).issubset(set(self._feat_mship.columns)):
+            e = f"Layer names({self.layer_names}) do not match column names in feature membership dataframe({self._feat_mship.columns})."
             
             logger.error(e)
             raise ValueError(e)
@@ -264,12 +312,66 @@ class Assay:
     @property
     def layer_names(self) -> list[str]:
         return list(self.layers.keys())
+
+
+class AssayDict:
+    assays: dict[str, Assay]
     
+    def __init__(self, assays: dict[Assay]):
+        self.assays = assays
+    
+    def __str__(self) -> str:
+        return str(self.assays)
+    
+    def __repr__(self) -> str:
+        return repr(self.assays)
+    
+    def __getitem__(self, assay_name):
+        match (assay_name in self.assays):
+            case(True):
+                return self.assays[assay_name]
+            case(False):
+                e = f"Invalid assay name: assay {assay_name} does not exist in {list(self.assays.keys())}."
+                logger.error(e)
+                
+                raise KeyError(e)
+    
+    def __setitem__(self, assay_name: str, assay: Assay):
+        self.assays[assay_name] = assay
+    
+    def __delitem__(self, assay_name):
+        match (assay_name in self.assays):
+            case(True):
+                del self.assays[assay_name]
+            case(False):
+                e = f"Invalid assay name: assay {assay_name} does not exist in {list(self.assays.keys())}."
+                logger.error(e)
+                
+                raise KeyError(e)
+    
+    def __contains__(self, assay_name):
+        return assay_name in self.assays
+    
+    def __iter__(self):
+        return iter(self.assays)
+    
+    def __len__(self):
+        return len(self.assays)
+    
+    def items(self):
+        return self.assays.items()
+    
+    def keys(self):
+        return self.assays.keys()
+    
+    def values(self):
+        return self.assays.values()
 
 
 class Experiment: 
-    assays: dict[str, Assay]
+    assays: AssayDict
     default_assay: str
+    
     
     # Constructors ----
     @classmethod
@@ -301,7 +403,7 @@ class Experiment:
         experiment = cls()
         
         # Initialize assays
-        experiment.assays = {}
+        experiment.assays = AssayDict({})
         
         # Set default assay
         experiment.def_assay = assay_name
@@ -351,7 +453,6 @@ class Experiment:
         `list[str]`
             A list of layer names.
         """
-        # TODO: Check assay exists
         
         return list(self.assays[assay].layer_names)
     
@@ -375,7 +476,6 @@ class Experiment:
         `Layer`
             A `Layer` object.
         """
-        # TODO: Check assay and layer exist
         
         # Check object is valid
         self.assert_valid()
@@ -399,6 +499,33 @@ class Experiment:
                 self.assays[assay].layers[layer_name] = layer
             case(False):
                 self.assays[assay] = Assay.from_layer(layer, layer_name)
+        
+        # Reference assay
+        cur_assay: Assay = self.assays[assay]
+        
+        # Ensure observations and features are labelled correctly
+        if (cur_assay._obs_label != layer.obs_names.name):
+            w = f"Assay[{assay}], Layer[{layer_name}] | Mismatching observation labels: existing observations labelled '{cur_assay._obs_label}' but new layer has '{layer.obs_names.name}'. Overwriting observation label in new layer with '{cur_assay._obs_label}', are you sure this layer is part of the correct Assay?"
+            logger.warning(w)
+            
+            layer.obs_names = layer.obs_names.rename(cur_assay._obs_label)
+        if (cur_assay._feat_label != layer.feat_names.name):
+            w = f"Assay[{assay}], Layer[{layer_name}] | Mismatching feature labels: existing features labelled '{cur_assay._feat_label}' but new layer has label '{layer.feat_names.name}'. Overwriting feature label in new layer with '{cur_assay._obs_label}', are you sure this layer is part of the correct Assay?"
+            logger.warning(w)
+            
+            layer.feat_names = layer.feat_names.rename(cur_assay._feat_label)
+        
+        # Add layer membership
+        cur_assay._obs_mship = cur_assay._obs_mship.with_columns(
+            pl.col(cur_assay._obs_label)
+            .is_in(layer.obs_names)
+            .alias(layer_name)
+        )
+        cur_assay._feat_mship = cur_assay._feat_mship.with_columns(
+            pl.col(cur_assay._feat_label)
+            .is_in(layer.feat_names)
+            .alias(layer_name)
+        )
     
     
     def feat_md(self, assay: str | None = None) -> pl.DataFrame:
@@ -415,7 +542,6 @@ class Experiment:
         DataFrame 
             A polars DataFrame containing feature-level metadata.
         """
-        # TODO: Check assay exists
         
         # Check object is valid
         self.assert_valid()
@@ -436,21 +562,25 @@ class Experiment:
         - (DataFrame) : A polars DataFrame containing observation-level 
             metadata.
         """
-        # TODO: Check assay exists
         
         # Check object is valid
         self.assert_valid()
         
         return self.assays[assay].obs_md
 
+from turgnamh.core.experiment import Layer, Assay, Experiment
+
 layer = Layer(np.ones(shape = (10,10)),
-                  pl.Series("barcode", np.arange(10)),
-                  pl.Series("gene", np.arange(10)))
+                  pl.Series(name = "10", values = np.arange(10)),
+                  pl.Series(name = "hi", values = np.arange(10)))
 
 data = Experiment.from_layer(
     layer = layer,
     assay_name = "RNA",
     layer_name = "counts"
 )
+import logging; logger.setLevel(logging.INFO)
 
 data.set_layer(layer, "woohoo", "RNA")
+
+data.set_layer(layer, "woohoo", "DNA")
